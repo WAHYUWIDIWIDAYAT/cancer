@@ -1,0 +1,83 @@
+from flask import Flask, render_template, request, jsonify
+from keras.models import load_model
+from tensorflow.keras.preprocessing.image import img_to_array
+from keras.applications.mobilenet_v2 import preprocess_input, decode_predictions, MobileNetV2
+import tensorflow as tf
+from skimage import transform, io
+import numpy as np
+import os
+from PIL import Image
+from datetime import datetime
+from flask_cors import CORS
+
+app = Flask(__name__)
+
+modelvgg = load_model("Cendekia-pest-86.00.h5")
+
+UPLOAD_FOLDER = 'static/uploads/'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'tiff', 'webp', 'jfif'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# routes
+@app.route("/", methods=['GET', 'POST'])
+def main():
+    return render_template("cnn.html")
+
+@app.route("/classification", methods=['GET', 'POST'])
+def classification():
+    return render_template("classifications.html")
+
+@app.route('/submit', methods=['POST'])
+def predict():
+    if 'file' not in request.files:
+        resp = jsonify({'message': 'No image in the request'})
+        resp.status_code = 400
+        return resp
+    files = request.files.getlist('file')
+    filename = "temp_image.png"
+    errors = {}
+    success = False
+    for file in files:
+        if file and allowed_file(file.filename):
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            success = True
+        else:
+            errors["message"] = 'File type of {} is not allowed'.format(file.filename)
+
+    if not success:
+        resp = jsonify(errors)
+        resp.status_code = 400
+        return resp
+    img_url = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+
+    # convert image to RGB
+    img = Image.open(img_url).convert('RGB')
+    now = datetime.now()
+    predict_image_path = 'static/uploads/' + now.strftime("%d%m%y-%H%M%S") + ".png"
+    image_predict = predict_image_path
+    img.convert('RGB').save(image_predict, format="png")
+    img.close()
+
+    # prepare image for prediction
+    img = Image.open(predict_image_path)
+    img = img.resize((128, 128))
+    x = img_to_array(img)
+    x = x / 127.5 - 1
+    x = np.expand_dims(x, axis=0)
+    images = np.vstack([x])
+
+    # predict
+    prediction_array_vgg = modelvgg.predict(images)
+
+    # prepare API response
+    class_names = ['Cancer', 'Normal']
+    return render_template("classifications.html", img_path=img_url,
+                           predictionvgg=class_names[np.argmax(prediction_array_vgg)],
+                           confidencevgg='{:2.0f}%'.format(100 * np.max(prediction_array_vgg)))
+
+if __name__ == '__main__':
+    # app.debug = True
+	app.run(debug = True)
